@@ -1,15 +1,20 @@
 """The plot's view-model: per-variable data buffers, axis assignment, and visibility.
 
 Kept free of Qt so the assignment/visibility logic is unit-testable. The Qt window mirrors
-this state onto pyqtgraph curves.
+this state onto pyqtgraph curves. Each series is backed by a fixed-capacity ring buffer so
+memory stays bounded over a long run.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 
+from .ring_buffer import RingBuffer
 from .sample import VariableSpec
+
+# Covers a 4-6 timestep/hour annual run (35k-52k points) without rolling; ~1 MB/series.
+DEFAULT_CAPACITY = 60_000
 
 
 class Axis(Enum):
@@ -20,27 +25,25 @@ class Axis(Enum):
 @dataclass
 class Series:
     spec: VariableSpec
-    x: list[float] = field(default_factory=list)
-    y: list[float] = field(default_factory=list)
+    buf: RingBuffer
     axis: Axis = Axis.LEFT
     visible: bool = True
 
 
 class PlotModel:
-    def __init__(self) -> None:
+    def __init__(self, capacity: int = DEFAULT_CAPACITY) -> None:
+        self._capacity = capacity
         self._series: dict[VariableSpec, Series] = {}
 
     def ensure(self, spec: VariableSpec) -> Series:
         series = self._series.get(spec)
         if series is None:
-            series = Series(spec)
+            series = Series(spec, RingBuffer(self._capacity))
             self._series[spec] = series
         return series
 
     def add_point(self, spec: VariableSpec, x: float, y: float) -> None:
-        series = self.ensure(spec)
-        series.x.append(x)
-        series.y.append(y)
+        self.ensure(spec).buf.append(x, y)
 
     def set_axis(self, spec: VariableSpec, axis: Axis) -> None:
         self.ensure(spec).axis = axis

@@ -92,11 +92,14 @@ class PlotWindow(QtWidgets.QMainWindow):
         bar = QtWidgets.QHBoxLayout()
         self._pause_btn = QtWidgets.QPushButton("Pause")
         self._abort_btn = QtWidgets.QPushButton("Abort")
+        self._reset_btn = QtWidgets.QPushButton("Reset view")
         self._pause_btn.clicked.connect(self._toggle_pause)
         self._abort_btn.clicked.connect(self._on_abort)
+        self._reset_btn.clicked.connect(self._reset_view)
         self._status = QtWidgets.QLabel("running")
         bar.addWidget(self._pause_btn)
         bar.addWidget(self._abort_btn)
+        bar.addWidget(self._reset_btn)
         bar.addStretch(1)
         bar.addWidget(self._status)
         outer.addLayout(bar)
@@ -116,6 +119,7 @@ class PlotWindow(QtWidgets.QMainWindow):
             return
         self._model.ensure(spec)
         curve = pg.PlotDataItem([], [], pen=pg.intColor(len(self._curves)), name=str(spec))
+        curve.setDownsampling(auto=True, method="peak")  # keep redraw cheap at annual scale
         self._curves[spec] = curve
         self._left_vb.addItem(curve)
         self._legend.addItem(curve, str(spec))
@@ -174,6 +178,11 @@ class PlotWindow(QtWidgets.QMainWindow):
         self._pause_btn.setEnabled(False)
         self._abort_btn.setEnabled(False)
 
+    def _reset_view(self) -> None:
+        # re-enable auto-range on both axes (the user's zoom/pan disables it) -> full extent
+        self._pi.enableAutoRange()
+        self._right_vb.enableAutoRange()
+
     # -- streaming ----------------------------------------------------------------------
 
     def _refresh(self) -> None:
@@ -186,7 +195,7 @@ class PlotWindow(QtWidgets.QMainWindow):
                 self._model.add_point(spec, ts, value)
                 touched.add(spec)
         for spec in touched:
-            series = self._model.series_for(spec)
-            self._curves[spec].setData(series.x, series.y)
+            x, y = self._model.series_for(spec).buf.xy()
+            self._curves[spec].setData(x, y)
         if not self._driver.is_running and self._status.text() == "running":
             self._status.setText("error" if self._driver.error else "finished")

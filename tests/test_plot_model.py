@@ -11,16 +11,17 @@ def test_new_series_defaults_to_left_axis_and_visible():
     s = m.series_for(A)
     assert s.axis == Axis.LEFT
     assert s.visible is True
-    assert s.x == [1.0] and s.y == [20.0]
+    x, y = s.buf.xy()
+    assert list(x) == [1.0] and list(y) == [20.0]
 
 
 def test_add_point_appends():
     m = PlotModel()
     m.add_point(A, 1.0, 20.0)
     m.add_point(A, 2.0, 21.0)
-    s = m.series_for(A)
-    assert s.x == [1.0, 2.0]
-    assert s.y == [20.0, 21.0]
+    x, y = m.series_for(A).buf.xy()
+    assert list(x) == [1.0, 2.0]
+    assert list(y) == [20.0, 21.0]
 
 
 def test_set_axis_and_visibility():

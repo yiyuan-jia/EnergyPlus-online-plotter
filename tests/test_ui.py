@@ -41,7 +41,8 @@ def test_plot_window_drains_samples_and_excludes_warmup(qapp):
     sink.emit(_sample(is_warmup=False, value=9.0))
     window._refresh()
 
-    _, y = window._curves[DRYBULB].getData()
+    # assert via the model's ring buffer (the curve's displayed data is downsample/clip-dependent)
+    _, y = window._model.series_for(DRYBULB).buf.xy()
     assert list(y) == [9.0]
 
 
