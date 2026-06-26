@@ -1,8 +1,9 @@
 """pyqtgraph live-plot window — the v1 sink for the driver's Sample stream.
 
-This is the swappable side of the SampleSink seam: it consumes Samples and knows nothing about
-EnergyPlus. A QTimer drains the queue on the Qt thread so the driver's worker thread never
-touches widgets.
+The swappable side of the SampleSink seam: it consumes Samples and knows nothing about
+EnergyPlus. A QTimer drains the queue on the Qt thread so the worker thread never touches
+widgets. Per-variable axis/visibility state lives in a Qt-free :class:`PlotModel`; this window
+just mirrors it onto pyqtgraph curves and a control panel.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets
 
 from .driver import EnergyPlusDriver
+from .plot_model import Axis, PlotModel
 from .sample import Sample, VariableSpec, drop_warmup
 
 # EnergyPlus reports day-of-year + hour-of-day; anchor to a nominal non-leap year for the axis.
@@ -49,23 +51,44 @@ class PlotWindow(QtWidgets.QMainWindow):
         self._driver = driver
         self._sink = sink
         self._paused = False
+        self._model = PlotModel()
+        self._curves: dict[VariableSpec, pg.PlotDataItem] = {}
 
         self.setWindowTitle("EnergyPlus Online Plotter")
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
-        layout = QtWidgets.QVBoxLayout(central)
+        outer = QtWidgets.QVBoxLayout(central)
+        body = QtWidgets.QHBoxLayout()
+        outer.addLayout(body, 1)
 
+        # plot with independent left/right Y axes (separate ViewBoxes share the X axis)
         self._plot = pg.PlotWidget(axisItems={"bottom": pg.DateAxisItem()})
-        self._plot.addLegend()
-        self._plot.setLabel("left", "value")
-        self._plot.showGrid(x=True, y=True, alpha=0.3)
-        layout.addWidget(self._plot)
+        self._pi = self._plot.getPlotItem()
+        self._left_vb = self._pi.vb
+        self._legend = self._pi.addLegend()
+        self._pi.showGrid(x=True, y=True, alpha=0.3)
+        self._pi.setLabel("left", "value (left axis)")
+        self._right_vb = pg.ViewBox()
+        self._pi.showAxis("right")
+        self._pi.scene().addItem(self._right_vb)
+        self._pi.getAxis("right").linkToView(self._right_vb)
+        self._right_vb.setXLink(self._pi)
+        self._pi.getAxis("right").setLabel("value (right axis)")
+        self._left_vb.sigResized.connect(self._sync_right_geometry)
+        body.addWidget(self._plot, 1)
 
-        # Curves are created lazily as variables appear in the stream (e.g. after '*' expansion).
-        self._x: dict[VariableSpec, list[float]] = {}
-        self._y: dict[VariableSpec, list[float]] = {}
-        self._curves: dict[VariableSpec, pg.PlotDataItem] = {}
+        # per-variable control panel
+        panel = QtWidgets.QScrollArea()
+        panel.setWidgetResizable(True)
+        panel.setFixedWidth(300)
+        holder = QtWidgets.QWidget()
+        self._controls = QtWidgets.QVBoxLayout(holder)
+        self._controls.addWidget(QtWidgets.QLabel("Variables  (show · L/R axis)"))
+        self._controls.addStretch(1)
+        panel.setWidget(holder)
+        body.addWidget(panel)
 
+        # transport bar
         bar = QtWidgets.QHBoxLayout()
         self._pause_btn = QtWidgets.QPushButton("Pause")
         self._abort_btn = QtWidgets.QPushButton("Abort")
@@ -76,11 +99,62 @@ class PlotWindow(QtWidgets.QMainWindow):
         bar.addWidget(self._abort_btn)
         bar.addStretch(1)
         bar.addWidget(self._status)
-        layout.addLayout(bar)
+        outer.addLayout(bar)
 
         self._timer = QtCore.QTimer(self)
         self._timer.timeout.connect(self._refresh)
         self._timer.start(50)  # ~20 Hz
+
+    def _sync_right_geometry(self) -> None:
+        self._right_vb.setGeometry(self._left_vb.sceneBoundingRect())
+        self._right_vb.linkedViewChanged(self._left_vb, self._right_vb.XAxis)
+
+    # -- per-variable curves + controls (created lazily as specs appear) -----------------
+
+    def _ensure_series(self, spec: VariableSpec) -> None:
+        if spec in self._curves:
+            return
+        self._model.ensure(spec)
+        curve = pg.PlotDataItem([], [], pen=pg.intColor(len(self._curves)), name=str(spec))
+        self._curves[spec] = curve
+        self._left_vb.addItem(curve)
+        self._legend.addItem(curve, str(spec))
+        self._add_control_row(spec)
+
+    def _add_control_row(self, spec: VariableSpec) -> None:
+        row = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        visible = QtWidgets.QCheckBox()
+        visible.setChecked(True)
+        visible.toggled.connect(lambda on, s=spec: self.set_visible(s, on))
+        axis = QtWidgets.QComboBox()
+        axis.addItems(["L", "R"])
+        axis.currentTextChanged.connect(
+            lambda text, s=spec: self.set_axis(s, Axis.RIGHT if text == "R" else Axis.LEFT)
+        )
+        label = QtWidgets.QLabel(str(spec))
+        label.setWordWrap(True)
+        layout.addWidget(visible)
+        layout.addWidget(axis)
+        layout.addWidget(label, 1)
+        self._controls.insertWidget(self._controls.count() - 1, row)  # before the trailing stretch
+
+    # -- view actions (wired to the controls; also exercised directly by tests) ----------
+
+    def set_axis(self, spec: VariableSpec, axis: Axis) -> None:
+        self._model.set_axis(spec, axis)
+        curve = self._curves[spec]
+        for vb in (self._left_vb, self._right_vb):
+            if curve in vb.addedItems:
+                vb.removeItem(curve)
+        (self._right_vb if axis == Axis.RIGHT else self._left_vb).addItem(curve)
+
+    def set_visible(self, spec: VariableSpec, visible: bool) -> None:
+        self._model.set_visible(spec, visible)
+        self._curves[spec].setVisible(visible)
+
+    # -- transport ----------------------------------------------------------------------
 
     def _toggle_pause(self) -> None:
         if self._paused:
@@ -100,13 +174,7 @@ class PlotWindow(QtWidgets.QMainWindow):
         self._pause_btn.setEnabled(False)
         self._abort_btn.setEnabled(False)
 
-    def _ensure_curve(self, spec: VariableSpec) -> None:
-        if spec not in self._curves:
-            self._x[spec] = []
-            self._y[spec] = []
-            self._curves[spec] = self._plot.plot(
-                [], [], pen=pg.intColor(len(self._curves)), name=str(spec)
-            )
+    # -- streaming ----------------------------------------------------------------------
 
     def _refresh(self) -> None:
         # warmup days repeat the first design day; exclude them from the plot.
@@ -114,12 +182,11 @@ class PlotWindow(QtWidgets.QMainWindow):
         for s in drop_warmup(self._sink.drain()):
             ts = _sample_timestamp(s)
             for spec, value in s.values.items():
-                self._ensure_curve(spec)
-                self._x[spec].append(ts)
-                self._y[spec].append(value)
+                self._ensure_series(spec)
+                self._model.add_point(spec, ts, value)
                 touched.add(spec)
-        # Repaint each affected curve once per tick, not once per sample.
         for spec in touched:
-            self._curves[spec].setData(self._x[spec], self._y[spec])
+            series = self._model.series_for(spec)
+            self._curves[spec].setData(series.x, series.y)
         if not self._driver.is_running and self._status.text() == "running":
             self._status.setText("error" if self._driver.error else "finished")
