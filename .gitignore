@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Packaging / tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# EnergyPlus run artifacts
+eplusout.*
+eplusssz.*
+epluszsz.*
+eplustbl.*
+sqlite.err
+*.audit
+*.bnd
+*.eio
+*.end
+*.err
+*.eso
+*.mdd
+*.mtd
+*.mtr
+*.rdd
+*.shd
+out/
+output/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
