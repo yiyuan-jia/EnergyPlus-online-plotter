@@ -26,11 +26,16 @@ v1 is a single local script run under an installed EnergyPlus's bundled Python. 
 behind a **SampleSink** seam so a future shareable/web frontend reuses the entire engine and only
 the UI is replaced.
 
+## Supported environment
+
+- **EnergyPlus 25.2** (`C:\EnergyPlusV25-2-0`, bundled Python 3.13) is the supported target.
+  Older installs that predate `runtime.stop_simulation` (e.g. V9.x) are out of scope.
+
 ## User Stories
 
 1. As a modeler, I want to launch the plotter against my IDF and EPW from one command, so that I can start watching a run without extra setup.
-2. As a modeler, I want the plotter to find my installed EnergyPlus automatically (newest version), so that I don't have to configure paths by hand.
-3. As a modeler, I want to override which EnergyPlus install is used, so that I can plot a model that targets a specific version.
+2. As a modeler, I want the plotter to find my installed EnergyPlus 25.2 automatically, so that I don't have to configure paths by hand.
+3. As a modeler, I want to override which EnergyPlus install is used, so that I can point at a specific copy.
 4. As a modeler, I want the plotter to stream the variables my model already declares as `Output:Variable`, so that I see what I asked for without redefining it elsewhere.
 5. As a modeler, I want `Output:Variable` entries with a `*` key expanded to one curve per matching key (e.g. per zone), so that I see every instance the model reports.
 6. As a modeler, I want each variable drawn as a live line that advances as the simulation steps forward, so that I perceive the run's progress in real time.
@@ -52,15 +57,24 @@ the UI is replaced.
 
 ## Implementation Decisions
 
+The driver spine below was **validated by a throwaway prototype** (kept local, not committed; see
+`prototypes/NOTES.md`) against EnergyPlus 25.2 — streaming, pause, and abort all confirmed
+working, so these are no longer assumptions.
+
+- **Target EnergyPlus 25.2 (ADR-0004):** locate the install by **numeric** version (parse
+  `V25-2-0 -> (25, 2, 0)` — never a lexicographic sort, which would rank `V9-6-0` above
+  `V25-2-0`); default to 25.2, `--eplus-root` overrides. Wire `sys.path` and
+  `os.add_dll_directory(root)` so `pyenergyplus` imports and `energyplusapi.dll` loads.
 - **Driver mode (ADR-0001):** the plotter owns the run — it calls `run_energyplus(state, ["-w",
   epw, "-d", outdir, idf])` via the `pyenergyplus` Runtime API. We do not tail output files or
   embed a plugin in the IDF.
 - **Variable source:** parse the model's `Output:Variable` objects for their `(key, variable name,
   frequency)` triples. Because reported variables are computed by EnergyPlus, the **Sampler
-  callback** resolves a **Variable handle** for each and reads it directly — **no
-  `request_variable` call is needed**.
-- **`*` key expansion:** on the first ready timestep, expand any `*` key to concrete keys using
-  `list_available_api_data_csv`, then resolve and cache one handle per `(name, key)`.
+  callback** resolves a **Variable handle** for each and reads it directly. (Variables can also be
+  requested via `request_variable`, but v1 streams only declared outputs.)
+- **`*` key expansion:** on the first ready timestep, expand any `*` key to concrete keys. The
+  available `(name, key)` set is exposed after setup via `get_api_data` /
+  `list_available_api_data_csv` (277 points in the single-zone prototype run).
 - **Sampling cadence:** read all handles at `callback_end_zone_timestep_after_zone_reporting`
   (the zone timestep). The IDF's per-variable reporting frequency is ignored for live reads.
   System/HVAC variables are read at the zone timestep in v1.
@@ -68,15 +82,19 @@ the UI is replaced.
   worker thread. The Sampler callback (on that thread) guards `api_data_fully_ready`, checks
   `warmup_flag`, builds a **Sample** (sim datetime, warmup flag, per-variable values) and pushes
   it to a thread-safe queue. **No subprocess/IPC in v1.**
-- **Run controls:** **pause/resume** = the callback blocks on a `threading.Event` (parks the
-  EnergyPlus thread) and unblocks on resume; **abort** = `runtime.stop_simulation(state)`.
-  **Restart** = `runtime.clear_callbacks()` + `state_manager.reset_state(state)`.
+- **Run controls (validated):**
+  - **Pause/resume** — the Sampler callback blocks on a `threading.Event` (parks the EnergyPlus
+    thread between timesteps); resume clears it. Not an EnergyPlus feature — purely our side.
+  - **Abort** — the callback checks an abort flag and calls `runtime.stop_simulation(state)`,
+    which ends the run promptly (~0.13s in the prototype) and cleanly (exit 0, output files
+    written). To abort *while paused*, set the flag and also unblock the pause Event so the parked
+    callback wakes, re-checks, and stops.
+  - **Restart** — `runtime.clear_callbacks()` + `state_manager.reset_state(state)`.
 - **The SampleSink seam (ADR-0003):** the driver emits Samples to a `SampleSink` interface; v1's
   sink is a queue the UI drains. The driver imports no UI code, so a `WebSocketSink` can be added
   later with no engine change.
 - **Modules & interfaces:**
-  - _EnergyPlus locator_ — resolves the install, wires `sys.path` and the DLL search dir so
-    `pyenergyplus` and `energyplusapi.dll` load.
+  - _EnergyPlus locator_ — resolves the 25.2 install (numeric version), wires `sys.path` + DLL dir.
   - _IDF outputs parser_ — `idf text -> list[(key, name, frequency)]`.
   - _Sample / SampleSink_ — the `Sample` value type and the sink protocol (the seam).
   - _EnergyPlusDriver_ — `start()`, `pause()`, `resume()`, `abort()`, emits Samples to a sink.
@@ -92,7 +110,8 @@ the UI is replaced.
   EnergyPlus run (a 1-day RunPeriod against a single-zone fixture + the bundled San Francisco EPW)
   with a recording sink, then assert: Samples are emitted; warmup Samples are excluded; a `*` key
   produces one series per key; pause stalls the stream; resume continues it; abort ends the run
-  promptly; streamed values match `eplusout.csv` for sampled timesteps.
+  promptly; streamed values match `eplusout.csv` for sampled timesteps. (The prototype is the
+  manual precursor of this automated test.)
 - **Secondary seam — IDF outputs parser (pure unit).** Feed IDF text (including `*` keys, mixed
   frequencies, comments) and assert the parsed `(key, name, frequency)` list. No EnergyPlus.
 - **UI kept thin.** Any view-model logic (axis assignment, ring buffer) is tested as plain
@@ -102,6 +121,7 @@ the UI is replaced.
 
 ## Out of Scope
 
+- EnergyPlus versions older than 25.2 (pre-`stop_simulation`).
 - Web or desktop distribution and the `WebSocketSink` (the seam is built for it, but it is not v1).
 - Plugin-mode adapter for plotting runs launched externally (EP-Launch / CBECC / CLI).
 - System-timestep (sub-zone-timestep) sampling for HVAC variables.
@@ -112,8 +132,11 @@ the UI is replaced.
 ## Further Notes
 
 - **Version coupling:** `pyenergyplus` must match its EnergyPlus install; run under that install's
-  `python.exe` and `os.add_dll_directory(eplus_root)` so the API DLL loads.
-- **Doc fix:** `CLAUDE.md` calls the data-exchange module `exchange.py`; it is `datatransfer.py`
-  (class `DataExchange`, exposed as `api.exchange`). Correct this.
+  `python.exe` (or any Python 3.13) with `os.add_dll_directory(eplus_root)` so the API DLL loads.
+- **Prototype verdict (local):** the driver spine was validated against EnergyPlus 25.2 — see
+  `prototypes/NOTES.md`. Two findings are baked into the issues: abort needs `stop_simulation`
+  (satisfied by the 25.2 target — issue #7) and the locator must sort installs numerically
+  (issue #2).
 - ADRs to record at implementation: 0001 driver mode, 0002 in-process thread (pause via blocked
-  callback / abort via `stop_simulation`), 0003 SampleSink seam for the future web frontend.
+  callback / abort via `stop_simulation`), 0003 SampleSink seam for the future web frontend,
+  0004 target EnergyPlus 25.2.

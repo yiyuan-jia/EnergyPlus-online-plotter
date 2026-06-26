@@ -53,6 +53,12 @@ an **EnergyPlus host** (Python, owning the API + simulation) feeding a **plot fr
 Treat the exact API method names/signatures above as version-sensitive: verify against the
 `pyenergyplus` in the user's installed EnergyPlus before relying on them.
 
+**Supported version: EnergyPlus 25.2** (`C:\EnergyPlusV25-2-0`, bundled Python 3.13). The driver
+spine — streaming via the zone-timestep callback, pause by blocking the callback thread, and
+abort via `runtime.stop_simulation(state)` — is validated against 25.2. Locate the install by
+**numeric** version (parse `V25-2-0 → (25, 2, 0)`; a string sort wrongly ranks `V9-6-0` above
+`V25-2-0`). Installs older than 25.2 (which lack `stop_simulation`) are out of scope.
+
 ## Stack — undecided (document both)
 
 The plotting/UI stack is intentionally open. The live-streaming requirement biases the
