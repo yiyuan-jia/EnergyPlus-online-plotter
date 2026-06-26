@@ -86,8 +86,17 @@ choice remains cheap. When the decision is made, record it here and delete the u
 
 ## Commands
 
-_None yet — repo is empty._ Add build/run/lint/test commands here the moment scaffolding
-exists. When you do, include how to run a **single** test, not just the whole suite.
+Environment is managed with **uv**; the package is `eplus_plotter` (src layout).
+
+- Install / sync deps: `uv sync --extra dev --extra ui`
+- Run the app: `uv run eplus-plotter run <model.idf> -w <weather.epw> [-d <outdir>] [--eplus-root <path>]`
+- Typecheck: `uv run mypy`
+- Full test suite: `uv run pytest`
+- A single test: `uv run pytest tests/test_driver.py::test_driver_streams_pauses_resumes_aborts`
+- Fast tests only (skip the real-EnergyPlus integration test): `uv run pytest -m "not eplus"`
+
+Tests marked `@pytest.mark.eplus` drive a real EnergyPlus run and are skipped when no install is
+found.
 
 ## Agent skills
 
