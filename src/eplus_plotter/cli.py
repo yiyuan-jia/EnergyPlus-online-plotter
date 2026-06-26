@@ -21,6 +21,12 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("-d", "--outdir", type=Path, default=Path("eplus-out"), help="output dir")
     run.add_argument("--eplus-root", type=Path, default=None, help="EnergyPlus install to use")
     run.add_argument(
+        "--var",
+        action="append",
+        metavar="NAME",
+        help="only stream the named Output:Variable(s); repeatable (default: all declared)",
+    )
+    run.add_argument(
         "--throttle",
         type=float,
         default=0.0,
@@ -34,6 +40,15 @@ def main(argv: list[str] | None = None) -> int:
 
     root = locate_energyplus(args.eplus_root)
     variables = parse_output_variables(args.idf.read_text())
+    if args.var:
+        wanted = {name.lower() for name in args.var}
+        variables = [spec for spec in variables if spec.name.lower() in wanted]
+        if not variables:
+            print(
+                f"[eplus-plotter] none of {args.var} match an Output:Variable in {args.idf}",
+                file=sys.stderr,
+            )
+            return 2
     if not variables:
         print(
             f"[eplus-plotter] {args.idf} declares no Output:Variable objects to plot.",

@@ -36,6 +36,8 @@ def test_driver_streams_pauses_resumes_aborts(eplus_model, recording_sink, tmp_p
         assert DRYBULB in sample.values
         assert -90.0 < sample.values[DRYBULB] < 90.0
         assert sample.sim_time_hours >= 0.0
+        # warmup samples must never reach the sink (#8)
+        assert all(not s.is_warmup for s in recording_sink.snapshot())
 
         # PAUSE: blocking the callback stalls the stream
         driver.pause()

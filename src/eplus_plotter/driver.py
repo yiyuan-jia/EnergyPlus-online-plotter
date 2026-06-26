@@ -157,6 +157,9 @@ class EnergyPlusDriver:
         if not self._resolved:
             self._resolve_handles(state)
 
+        if ex.warmup_flag(state):
+            return  # warmup repeats the first design day — don't emit or throttle it
+
         values = {
             spec: ex.get_variable_value(state, h)
             for spec, h in self._handles.items()
@@ -167,7 +170,7 @@ class EnergyPlusDriver:
                 day_of_year=ex.day_of_year(state),
                 current_time=ex.current_time(state),
                 sim_time_hours=ex.current_sim_time(state),
-                is_warmup=ex.warmup_flag(state),
+                is_warmup=False,
                 values=values,
             )
         )
