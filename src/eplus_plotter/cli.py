@@ -6,11 +6,8 @@ import argparse
 import sys
 from pathlib import Path
 
+from .idf_outputs import parse_output_variables
 from .locate import locate_energyplus
-from .sample import VariableSpec
-
-# v1 streams a single hardcoded variable; declared-Output:Variable parsing is a later slice.
-SITE_DRYBULB = VariableSpec("Site Outdoor Air Drybulb Temperature", "Environment")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -36,6 +33,13 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
     root = locate_energyplus(args.eplus_root)
+    variables = parse_output_variables(args.idf.read_text())
+    if not variables:
+        print(
+            f"[eplus-plotter] {args.idf} declares no Output:Variable objects to plot.",
+            file=sys.stderr,
+        )
+        return 2
     args.outdir.mkdir(parents=True, exist_ok=True)
 
     # Import Qt/UI lazily so the package imports (and most tests) don't require a display.
@@ -44,14 +48,13 @@ def main(argv: list[str] | None = None) -> int:
     from .driver import EnergyPlusDriver
     from .ui import PlotWindow, QueueSink
 
-    variables = [SITE_DRYBULB]
     sink = QueueSink()
     driver = EnergyPlusDriver(
         root, args.idf, args.weather, args.outdir, variables, sink, throttle=args.throttle
     )
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
-    window = PlotWindow(driver, sink, variables)
+    window = PlotWindow(driver, sink)
     window.resize(900, 600)
     window.show()
 

@@ -35,7 +35,7 @@ def test_plot_window_drains_samples_and_excludes_warmup(qapp):
     from eplus_plotter.ui import PlotWindow, QueueSink
 
     sink = QueueSink()
-    window = PlotWindow(_StubDriver(), sink, [DRYBULB])
+    window = PlotWindow(_StubDriver(), sink)
 
     sink.emit(_sample(is_warmup=True, value=5.0))  # warmup -> excluded
     sink.emit(_sample(is_warmup=False, value=9.0))

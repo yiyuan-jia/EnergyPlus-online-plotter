@@ -102,7 +102,8 @@ class EnergyPlusDriver:
             self._api = api
             state = api.state_manager.new_state()
             for spec in self._variables:
-                api.exchange.request_variable(state, spec.name, spec.key)
+                if spec.key != "*":  # declared '*' variables are already computed; can't request
+                    api.exchange.request_variable(state, spec.name, spec.key)
             api.runtime.callback_end_zone_timestep_after_zone_reporting(state, self._on_timestep)
             args = ["-d", self._outdir, "-w", self._epw, *self._extra_args, self._idf]
             self._exit_code = api.runtime.run_energyplus(state, args)
@@ -112,12 +113,26 @@ class EnergyPlusDriver:
 
     def _resolve_handles(self, state: Any) -> None:
         ex = self._api.exchange
-        missing = []
+        available: list[Any] | None = None
+        missing: list[VariableSpec] = []
         for spec in self._variables:
-            handle = ex.get_variable_handle(state, spec.name, spec.key)
-            self._handles[spec] = handle
-            if handle < 0:
-                missing.append(spec)
+            concrete = [spec]
+            if spec.key == "*":  # expand to one concrete (name, key) per matching component
+                if available is None:
+                    available = ex.get_api_data(state)
+                concrete = [
+                    VariableSpec(spec.name, point.key)
+                    for point in available
+                    if point.what == "OutputVariable"
+                    and point.name.lower() == spec.name.lower()
+                ]
+                if not concrete:
+                    missing.append(spec)
+            for resolved_spec in concrete:
+                handle = ex.get_variable_handle(state, resolved_spec.name, resolved_spec.key)
+                self._handles[resolved_spec] = handle
+                if handle < 0:
+                    missing.append(resolved_spec)
         self._resolved = True
         if missing:
             names = ", ".join(str(s) for s in missing)

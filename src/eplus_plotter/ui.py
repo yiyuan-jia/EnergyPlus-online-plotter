@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import queue
 from datetime import datetime, timedelta
-from typing import Sequence
 
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets
@@ -45,12 +44,7 @@ class QueueSink:
 
 
 class PlotWindow(QtWidgets.QMainWindow):
-    def __init__(
-        self,
-        driver: EnergyPlusDriver,
-        sink: QueueSink,
-        variables: Sequence[VariableSpec],
-    ) -> None:
+    def __init__(self, driver: EnergyPlusDriver, sink: QueueSink) -> None:
         super().__init__()
         self._driver = driver
         self._sink = sink
@@ -67,13 +61,10 @@ class PlotWindow(QtWidgets.QMainWindow):
         self._plot.showGrid(x=True, y=True, alpha=0.3)
         layout.addWidget(self._plot)
 
+        # Curves are created lazily as variables appear in the stream (e.g. after '*' expansion).
         self._x: dict[VariableSpec, list[float]] = {}
         self._y: dict[VariableSpec, list[float]] = {}
         self._curves: dict[VariableSpec, pg.PlotDataItem] = {}
-        for i, spec in enumerate(variables):
-            self._x[spec] = []
-            self._y[spec] = []
-            self._curves[spec] = self._plot.plot([], [], pen=pg.intColor(i), name=str(spec))
 
         bar = QtWidgets.QHBoxLayout()
         self._pause_btn = QtWidgets.QPushButton("Pause")
@@ -109,14 +100,21 @@ class PlotWindow(QtWidgets.QMainWindow):
         self._pause_btn.setEnabled(False)
         self._abort_btn.setEnabled(False)
 
+    def _ensure_curve(self, spec: VariableSpec) -> None:
+        if spec not in self._curves:
+            self._x[spec] = []
+            self._y[spec] = []
+            self._curves[spec] = self._plot.plot(
+                [], [], pen=pg.intColor(len(self._curves)), name=str(spec)
+            )
+
     def _refresh(self) -> None:
         # warmup days repeat the first design day; exclude them from the plot.
         touched: set[VariableSpec] = set()
         for s in drop_warmup(self._sink.drain()):
             ts = _sample_timestamp(s)
             for spec, value in s.values.items():
-                if spec not in self._curves:
-                    continue
+                self._ensure_curve(spec)
                 self._x[spec].append(ts)
                 self._y[spec].append(value)
                 touched.add(spec)
