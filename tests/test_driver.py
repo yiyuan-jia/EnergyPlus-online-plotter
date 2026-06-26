@@ -60,6 +60,21 @@ def test_driver_streams_pauses_resumes_aborts(eplus_model, recording_sink, tmp_p
 
 
 @pytest.mark.eplus
+def test_annual_flag_excludes_design_days(eplus_model, recording_sink, tmp_path):
+    """EnergyPlus --annual skips the sizing design days, so the stream starts at the run period."""
+    root, idf, epw = eplus_model
+    driver = EnergyPlusDriver(
+        root, idf, epw, tmp_path, [DRYBULB], recording_sink,
+        extra_args=["--annual"], throttle=0.0,
+    )
+    driver.start()
+    driver.join(timeout=180)
+    samples = recording_sink.snapshot()
+    assert samples
+    assert samples[0].day_of_year == 1  # run period starts Jan 1, no Dec-21/Jul-21 design days
+
+
+@pytest.mark.eplus
 def test_star_key_expands_to_one_series_per_key(eplus_model, recording_sink, tmp_path):
     """A '*' key resolves to one concrete (name, key) series per matching component."""
     root, idf, epw = eplus_model

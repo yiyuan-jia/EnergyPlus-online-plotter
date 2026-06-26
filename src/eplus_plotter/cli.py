@@ -32,6 +32,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=0.0,
         help="seconds to sleep per timestep (slow a fast sim down so you can watch it)",
     )
+    run.add_argument(
+        "--include-sizing",
+        action="store_true",
+        help="also run/plot sizing design days (default: skip them via EnergyPlus --annual, "
+        "which forces a full annual weather run)",
+    )
     return p
 
 
@@ -63,9 +69,18 @@ def main(argv: list[str] | None = None) -> int:
     from .driver import EnergyPlusDriver
     from .ui import PlotWindow, QueueSink
 
+    # By default skip the sizing design days entirely so they never reach the plot.
+    extra_args = [] if args.include_sizing else ["--annual"]
     sink = QueueSink()
     driver = EnergyPlusDriver(
-        root, args.idf, args.weather, args.outdir, variables, sink, throttle=args.throttle
+        root,
+        args.idf,
+        args.weather,
+        args.outdir,
+        variables,
+        sink,
+        extra_args=extra_args,
+        throttle=args.throttle,
     )
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
